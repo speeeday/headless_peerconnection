@@ -422,7 +422,7 @@ void GtkMainWnd::OnRowActivated(GtkTreeView* tree_view,
 
 void GtkMainWnd::OnRedraw() {
   gdk_threads_enter();
-
+  /*
   VideoRenderer* remote_renderer = remote_renderer_.get();
   if (remote_renderer && remote_renderer->image() != NULL &&
       draw_area_ != NULL) {
@@ -475,7 +475,7 @@ void GtkMainWnd::OnRedraw() {
 
     gtk_widget_queue_draw(draw_area_);
   }
-
+  */
   gdk_threads_leave();
 }
 
