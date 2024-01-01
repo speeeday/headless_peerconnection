@@ -94,6 +94,8 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     if (capturer) {
       return rtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
     }
+    return nullptr;
+  }
     /*
     int num_devices = info->NumberOfDevices();
     for (int i = 0; i < num_devices; ++i) {
