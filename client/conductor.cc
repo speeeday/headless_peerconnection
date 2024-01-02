@@ -87,13 +87,6 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     if (!info) {
       return nullptr;
     }
-
-    capturer = absl::WrapUnique(
-        webrtc::test::VcmCapturer::Create(kWidth, kHeight, kFps, 1));
-    if (capturer) {
-      return rtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
-    }
-/*
     int num_devices = info->NumberOfDevices();
     for (int i = 0; i < num_devices; ++i) {
       capturer = absl::WrapUnique(
@@ -102,7 +95,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
         return rtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
       }
     }
-*/
+
     return nullptr;
   }
 
@@ -319,6 +312,21 @@ void Conductor::OnPeerDisconnected(int id) {
   }
 }
 
+
+class StatsCollector : public webrtc::RTCStatsCollectorCallback {
+public:
+
+    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+        for (const webrtc::RTCStats& stats : *report) {
+            // Log specific stats here. Example:
+            if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
+                const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
+                RTC_LOG(LS_INFO) << "Current round trip time: " << candidate_pair.current_round_trip_time_ms();
+            }
+        }
+    }
+};
+
 void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
   RTC_DCHECK(peer_id_ == peer_id || peer_id_ == -1);
   RTC_DCHECK(!message.empty());
@@ -349,14 +357,20 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
     RTC_LOG(LS_WARNING) << "Received unknown message. " << message;
     return;
   }
+
+  peer_connection_->GetStats(
+      rtc::scoped_refptr<webrtc::RTCStatsCollectorCallback>(
+          new rtc::RefCountedObject<StatsCollector>));
+
   std::string type_str;
   std::string json_object;
 
   rtc::GetStringFromJsonObject(jmessage, kSessionDescriptionTypeName,
                                &type_str);
-  if (!type_str.empty()) {
+  if (!type_str.empty()) { 
     if (type_str == "offer-loopback") {
       // This is a loopback call.
+      .0
       // Recreate the peerconnection with DTLS disabled.
       if (!ReinitializePeerConnectionForLoopback()) {
         RTC_LOG(LS_ERROR) << "Failed to initialize our PeerConnection instance";
