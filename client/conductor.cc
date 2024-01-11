@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <fstream>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -26,7 +27,9 @@
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/audio_options.h"
 #include "api/create_peerconnection_factory.h"
+#include "api/peer_connection_interface.h"
 #include "api/rtp_sender_interface.h"
+#include "api/stats/rtcstats_objects.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
@@ -48,6 +51,7 @@
 #include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/strings/json.h"
 #include "test/vcm_capturer.h"
@@ -312,19 +316,37 @@ void Conductor::OnPeerDisconnected(int id) {
   }
 }
 
-
-class StatsCollector : public webrtc::RTCStatsCollectorCallback {
+class MyStatsCollector : public webrtc::RTCStatsCollectorCallback {
 public:
 
+    explicit MyStatsCollector(const std::string& filename) : filename_(filename) {}
+    // Override the OnStatsDelivered method to handle the stats.
     void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+        std::ofstream logfile(filename_, std::ios::app);
+
+        if (!logfile.is_open()) {
+            RTC_LOG(LS_ERROR) << "Failed to open file: " << filename_;
+            return;
+        }
+
+        // Process the stats report here.
         for (const webrtc::RTCStats& stats : *report) {
             // Log specific stats here. Example:
             if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
                 const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
-                RTC_LOG(LS_INFO) << "Current round trip time: " << candidate_pair.current_round_trip_time_ms();
+                if (candidate_pair.current_round_trip_time.is_defined()) {
+                    logfile << "[INFO]: Current round trip time: " << std::to_string(*(candidate_pair.current_round_trip_time)) << "\n";
+                }
+                else {
+                    logfile << "[INFO]: Current round trip time: undefined!!!!!\n";
+                }
             }
         }
+
+        logfile.close();
     }
+private:
+    std::string filename_;
 };
 
 void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
@@ -348,6 +370,10 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
     return;
   }
 
+  RTC_LOG(LS_INFO) << "Received message from peer :" << message;
+  rtc::scoped_refptr<MyStatsCollector> stats_collector(new rtc::RefCountedObject<MyStatsCollector>("output_stats.txt"));
+  peer_connection_->GetStats(stats_collector.get());
+
   Json::CharReaderBuilder factory;
   std::unique_ptr<Json::CharReader> reader =
       absl::WrapUnique(factory.newCharReader());
@@ -358,9 +384,6 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
     return;
   }
 
-  peer_connection_->GetStats(
-      rtc::scoped_refptr<webrtc::RTCStatsCollectorCallback>(
-          new rtc::RefCountedObject<StatsCollector>));
 
   std::string type_str;
   std::string json_object;
@@ -370,7 +393,6 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
   if (!type_str.empty()) { 
     if (type_str == "offer-loopback") {
       // This is a loopback call.
-      .0
       // Recreate the peerconnection with DTLS disabled.
       if (!ReinitializePeerConnectionForLoopback()) {
         RTC_LOG(LS_ERROR) << "Failed to initialize our PeerConnection instance";
@@ -550,6 +572,12 @@ void Conductor::UIThreadCallback(int msg_id, void* data) {
 
     case SEND_MESSAGE_TO_PEER: {
       RTC_LOG(LS_INFO) << "SEND_MESSAGE_TO_PEER";
+
+      if (peer_connection_.get()) {
+          rtc::scoped_refptr<MyStatsCollector> stats_collector(new rtc::RefCountedObject<MyStatsCollector>("output_stats.txt"));
+          peer_connection_->GetStats(stats_collector.get());
+      }
+
       std::string* msg = reinterpret_cast<std::string*>(data);
       if (msg) {
         // For convenience, we always run the message through the queue.
