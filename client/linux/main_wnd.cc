@@ -429,6 +429,85 @@ void GtkMainWnd::OnRedraw() {
     width_ = remote_renderer->width();
     height_ = remote_renderer->height();
 
+    if (draw_buffer_.get() && draw_buffer_size_ < (width_ * height_ * 4) * 4)
+      draw_buffer_.reset();
+
+    if (!draw_buffer_.get()) {
+      draw_buffer_size_ = (width_ * height_ * 4) * 4;
+      draw_buffer_.reset(new uint8_t[draw_buffer_size_]);
+      gtk_widget_set_size_request(draw_area_, width_ * 2, height_ * 2);
+    }
+
+    const uint32_t* image =
+        reinterpret_cast<const uint32_t*>(remote_renderer->image());
+    uint32_t* scaled = reinterpret_cast<uint32_t*>(draw_buffer_.get());
+    for (int r = 0; r < height_; ++r) {
+      for (int c = 0; c < width_; ++c) {
+        int x = c * 2;
+        scaled[x] = scaled[x + 1] = image[c];
+      }
+
+      uint32_t* prev_line = scaled;
+      scaled += width_ * 2;
+      memcpy(scaled, prev_line, (width_ * 2) * 4);
+
+      image += width_;
+      scaled += width_ * 2;
+    }
+
+    VideoRenderer* local_renderer = local_renderer_.get();
+    if (local_renderer && local_renderer->image()) {
+      image = reinterpret_cast<const uint32_t*>(local_renderer->image());
+      scaled = reinterpret_cast<uint32_t*>(draw_buffer_.get());
+      // preview can be quite a lot bigger than remote video,
+      // downsacling by two is not always enough
+      int downscale_ratio = 2;
+      int preview_width = local_renderer->width() / 2;
+      int preview_height = local_renderer->height() / 2;
+      while (preview_width > width_ && preview_height > height_) {
+        downscale_ratio *= 2;
+        preview_width /= 2;
+        preview_height /= 2;
+      }
+      // Position the local preview on the right side.
+      scaled += (width_ * 2) - preview_width;
+      // right margin...
+      scaled -= 10;
+      // ... towards the bottom.
+      scaled += (height_ * 2 - preview_height) * width_ * 2;
+      // bottom margin...
+      scaled -= (width_ * 2) * 5;
+      for (int r = 0; r < local_renderer->height(); r += downscale_ratio) {
+        for (int csrc = 0, cdst = 0; csrc < local_renderer->width(); csrc += downscale_ratio, ++cdst) {
+          scaled[cdst] = image[csrc];
+        }
+        scaled += width_ * 2;
+        image += local_renderer->width() * downscale_ratio;
+      }
+    }
+
+#if GTK_MAJOR_VERSION == 2
+    gdk_draw_rgb_32_image(draw_area_->window,
+                          draw_area_->style->fg_gc[GTK_STATE_NORMAL], 0, 0,
+                          width_ * 2, height_ * 2, GDK_RGB_DITHER_MAX,
+                          draw_buffer_.get(), (width_ * 2) * 4);
+#else
+    gtk_widget_queue_draw(draw_area_);
+#endif
+  }
+  gdk_threads_leave();
+}
+
+/*
+void GtkMainWnd::OnRedraw() {
+  gdk_threads_enter();
+
+  VideoRenderer* remote_renderer = remote_renderer_.get();
+  if (remote_renderer && remote_renderer->image() != NULL &&
+      draw_area_ != NULL) {
+    width_ = remote_renderer->width();
+    height_ = remote_renderer->height();
+
     if (!draw_buffer_.get()) {
       draw_buffer_size_ = (width_ * height_ * 4) * 4;
       draw_buffer_.reset(new uint8_t[draw_buffer_size_]);
@@ -478,6 +557,7 @@ void GtkMainWnd::OnRedraw() {
 
   gdk_threads_leave();
 }
+*/
 
 void GtkMainWnd::Draw(GtkWidget* widget, cairo_t* cr) {
   cairo_format_t format = CAIRO_FORMAT_ARGB32;
