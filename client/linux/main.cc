@@ -105,6 +105,8 @@ int main(int argc, char* argv[]) {
   socket_server.set_client(&client);
   socket_server.set_conductor(conductor.get());
 
+  conductor->StartStatsThread();
+
   thread.Run();
 
   // gtk_main();
