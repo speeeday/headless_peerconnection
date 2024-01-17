@@ -13,8 +13,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <chrono>
 #include <fstream>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -65,6 +67,107 @@ const char kCandidateSdpName[] = "candidate";
 // Names used for a SessionDescription JSON object.
 const char kSessionDescriptionTypeName[] = "type";
 const char kSessionDescriptionSdpName[] = "sdp";
+
+class MyStatsObserver : public webrtc::StatsObserver {
+public:
+
+    MyStatsObserver(): ref_count_(0) {}
+
+    void AddRef() const override {
+      ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    rtc::RefCountReleaseStatus Release() const override {
+      const auto ref_count = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
+      RTC_DCHECK_GT(ref_count, 0);
+      if (ref_count == 1) {
+        delete this;
+        return rtc::RefCountReleaseStatus::kDroppedLastRef;
+      }
+      return rtc::RefCountReleaseStatus::kOtherRefsRemained;
+    }
+
+    void OnComplete(const webrtc::StatsReports& reports) override {
+        std::ofstream logfile("legacy_output_stats.txt", std::ios::app);
+
+        if (!logfile.is_open()) {
+            RTC_LOG(LS_ERROR) << "Failed to open file: legacy_output_stats.txt";
+            return;
+        }
+
+        // Process the stats here.
+        for (const webrtc::StatsReport* report : reports) {
+            // Example: Print the stats to standard output.
+            logfile << std::to_string(report->timestamp()) << " - Stats report id: " << report->id()->ToString() << "\n" << std::endl;
+            // Iterate through each stat in the report
+            for (const std::pair<const webrtc::StatsReport::StatsValueName,webrtc::StatsReport::ValuePtr>& stat : report->values()) {
+                logfile << stat.second->display_name() << ": ";
+
+                // Print the value based on the value's type
+                switch (stat.second->type()) {
+                    case webrtc::StatsReport::Value::kInt:
+                        logfile << stat.second->int_val();
+                        break;
+                    case webrtc::StatsReport::Value::kInt64:
+                        logfile << stat.second->int64_val();
+                        break;
+                    case webrtc::StatsReport::Value::kFloat:
+                        logfile << stat.second->float_val();
+                        break;
+                    case webrtc::StatsReport::Value::kString:
+                        logfile << stat.second->string_val();
+                        break;
+                    case webrtc::StatsReport::Value::kBool:
+                        logfile << (stat.second->bool_val() ? "true" : "false");
+                        break;
+                    // Include other cases as necessary
+                    default:
+                        logfile << "Unknown Type";
+                        break;
+                }
+                logfile << std::endl;
+            }
+            logfile << std::endl;
+        }
+    }
+
+private:
+    mutable std::atomic<int> ref_count_;
+};
+
+class MyStatsCollector : public webrtc::RTCStatsCollectorCallback {
+public:
+
+    explicit MyStatsCollector(const std::string& filename) : filename_(filename) {}
+    // Override the OnStatsDelivered method to handle the stats.
+    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+        std::ofstream logfile(filename_, std::ios::app);
+
+        if (!logfile.is_open()) {
+            RTC_LOG(LS_ERROR) << "Failed to open file: " << filename_;
+            return;
+        }
+
+        // Process the stats report here.
+        for (const webrtc::RTCStats& stats : *report) {
+            // Log specific stats here. Example:
+            if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
+                const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
+                if (candidate_pair.current_round_trip_time.is_defined()) {
+                    logfile << "[INFO]: Current round trip time: " << std::to_string(*(candidate_pair.current_round_trip_time)) << "\n";
+                }
+                else {
+                    logfile << "[INFO]: Current round trip time: undefined!!!!!\n";
+                }
+            }
+        }
+
+        logfile.close();
+    }
+private:
+    std::string filename_;
+};
+
 
 class DummySetSessionDescriptionObserver
     : public webrtc::SetSessionDescriptionObserver {
@@ -118,7 +221,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
 }  // namespace
 
 Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
-    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd) {
+    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), continue_collecting_stats_(false) {
   client_->RegisterObserver(this);
   main_wnd->RegisterObserver(this);
 
@@ -138,12 +241,9 @@ Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
       return;
   }
 
-    
+  stats_thread_ = rtc::Thread::Create();
+  stats_thread_->Start();
 
-}
-
-Conductor::~Conductor() {
-  RTC_DCHECK(!peer_connection_);
 }
 
 bool Conductor::connection_active() const {
@@ -153,6 +253,39 @@ bool Conductor::connection_active() const {
 void Conductor::Close() {
   client_->SignOut();
   DeletePeerConnection();
+}
+
+void Conductor::RepeatedlyCallGetStatsWrapper(Conductor* conductor) {
+  if (conductor) {
+    conductor->RepeatedlyCallStats();
+  } 
+}
+
+void Conductor::RepeatedlyCallStats() {
+  while (continue_collecting_stats_) {
+    if (peer_connection_.get()) {
+        MyStatsObserver* stats_observer = new MyStatsObserver();
+        peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
+    }
+
+    rtc::Thread::SleepMs(500);
+  }
+}
+
+void Conductor::StartStatsThread() {
+  stats_thread_->PostTask([this]() {
+    RepeatedlyCallGetStatsWrapper(this);
+  });
+}
+
+void Conductor::StopStatsThread() {
+  continue_collecting_stats_ = false;
+  stats_thread_->Stop();
+}
+
+Conductor::~Conductor() {
+  RTC_DCHECK(!peer_connection_);
+  StopStatsThread();
 }
 
 bool Conductor::InitializePeerConnection() {
@@ -335,106 +468,6 @@ void Conductor::OnPeerDisconnected(int id) {
   }
 }
 
-class MyStatsObserver : public webrtc::StatsObserver {
-public:
-
-    MyStatsObserver(): ref_count_(0) {}
-
-    void AddRef() const override {
-      ref_count_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    rtc::RefCountReleaseStatus Release() const override {
-      const auto ref_count = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
-      RTC_DCHECK_GT(ref_count, 0);
-      if (ref_count == 1) {
-        delete this;
-        return rtc::RefCountReleaseStatus::kDroppedLastRef;
-      }
-      return rtc::RefCountReleaseStatus::kOtherRefsRemained;
-    }
-
-    void OnComplete(const webrtc::StatsReports& reports) override {
-        std::ofstream logfile("legacy_output_stats.txt", std::ios::app);
-
-        if (!logfile.is_open()) {
-            RTC_LOG(LS_ERROR) << "Failed to open file: legacy_output_stats.txt";
-            return;
-        }
-
-        // Process the stats here.
-        for (const webrtc::StatsReport* report : reports) {
-            // Example: Print the stats to standard output.
-            logfile << std::to_string(report->timestamp()) << " - Stats report id: " << report->id()->ToString() << "\n" << std::endl;
-            // Iterate through each stat in the report
-            for (const std::pair<const webrtc::StatsReport::StatsValueName,webrtc::StatsReport::ValuePtr>& stat : report->values()) {
-                logfile << stat.second->display_name() << ": ";
-
-                // Print the value based on the value's type
-                switch (stat.second->type()) {
-                    case webrtc::StatsReport::Value::kInt:
-                        logfile << stat.second->int_val();
-                        break;
-                    case webrtc::StatsReport::Value::kInt64:
-                        logfile << stat.second->int64_val();
-                        break;
-                    case webrtc::StatsReport::Value::kFloat:
-                        logfile << stat.second->float_val();
-                        break;
-                    case webrtc::StatsReport::Value::kString:
-                        logfile << stat.second->string_val();
-                        break;
-                    case webrtc::StatsReport::Value::kBool:
-                        logfile << (stat.second->bool_val() ? "true" : "false");
-                        break;
-                    // Include other cases as necessary
-                    default:
-                        logfile << "Unknown Type";
-                        break;
-                }
-                logfile << std::endl;
-            }
-            logfile << std::endl;
-        }
-    }
-
-private:
-    mutable std::atomic<int> ref_count_;
-};
-
-class MyStatsCollector : public webrtc::RTCStatsCollectorCallback {
-public:
-
-    explicit MyStatsCollector(const std::string& filename) : filename_(filename) {}
-    // Override the OnStatsDelivered method to handle the stats.
-    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
-        std::ofstream logfile(filename_, std::ios::app);
-
-        if (!logfile.is_open()) {
-            RTC_LOG(LS_ERROR) << "Failed to open file: " << filename_;
-            return;
-        }
-
-        // Process the stats report here.
-        for (const webrtc::RTCStats& stats : *report) {
-            // Log specific stats here. Example:
-            if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
-                const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
-                if (candidate_pair.current_round_trip_time.is_defined()) {
-                    logfile << "[INFO]: Current round trip time: " << std::to_string(*(candidate_pair.current_round_trip_time)) << "\n";
-                }
-                else {
-                    logfile << "[INFO]: Current round trip time: undefined!!!!!\n";
-                }
-            }
-        }
-
-        logfile.close();
-    }
-private:
-    std::string filename_;
-};
-
 void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
   RTC_DCHECK(peer_id_ == peer_id || peer_id_ == -1);
   RTC_DCHECK(!message.empty());
@@ -457,13 +490,17 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
   }
 
   RTC_LOG(LS_INFO) << "Received message from peer :" << message;
+
+  continue_collecting_stats_ = true;
+
 /*
   rtc::scoped_refptr<MyStatsCollector> stats_collector(new rtc::RefCountedObject<MyStatsCollector>("output_stats.txt"));
   peer_connection_->GetStats(stats_collector.get());
-*/
+
 
   MyStatsObserver* stats_observer = new MyStatsObserver();
   peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
+*/
 
   Json::CharReaderBuilder factory;
   std::unique_ptr<Json::CharReader> reader =
