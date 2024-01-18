@@ -221,7 +221,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
 }  // namespace
 
 Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
-    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), continue_collecting_stats_(false) {
+    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), continue_collecting_stats_(true) {
   client_->RegisterObserver(this);
   main_wnd->RegisterObserver(this);
 
@@ -262,6 +262,7 @@ void Conductor::RepeatedlyCallGetStatsWrapper(Conductor* conductor) {
 }
 
 void Conductor::RepeatedlyCallStats() {
+  RTC_LOG(LS_INFO) << "Called the function StartStatsThread!!!\n";
   while (continue_collecting_stats_) {
     if (peer_connection_.get()) {
         MyStatsObserver* stats_observer = new MyStatsObserver();
@@ -273,6 +274,7 @@ void Conductor::RepeatedlyCallStats() {
 }
 
 void Conductor::StartStatsThread() {
+  RTC_LOG(LS_INFO) << "Called the function StartStatsThread!!!\n";
   stats_thread_->PostTask([this]() {
     RepeatedlyCallGetStatsWrapper(this);
   });
@@ -491,7 +493,6 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
 
   RTC_LOG(LS_INFO) << "Received message from peer :" << message;
 
-  continue_collecting_stats_ = true;
 
 /*
   rtc::scoped_refptr<MyStatsCollector> stats_collector(new rtc::RefCountedObject<MyStatsCollector>("output_stats.txt"));
