@@ -10,9 +10,11 @@
 
 #include "examples/peerconnection/client/conductor.h"
 
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <fstream>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -26,7 +28,9 @@
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/audio_options.h"
 #include "api/create_peerconnection_factory.h"
+#include "api/peer_connection_interface.h"
 #include "api/rtp_sender_interface.h"
+#include "api/stats/rtcstats_objects.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
@@ -48,6 +52,7 @@
 #include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/strings/json.h"
 #include "test/vcm_capturer.h"
@@ -87,6 +92,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     if (!info) {
       return nullptr;
     }
+    /*
     const int virtualDeviceIndex = 16;
 
     capturer = absl::WrapUnique(
@@ -96,7 +102,8 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     }
     return nullptr;
   }
-    /*
+    */
+    
     int num_devices = info->NumberOfDevices();
     for (int i = 0; i < num_devices; ++i) {
       capturer = absl::WrapUnique(
@@ -109,7 +116,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     return nullptr;
   }
 
-    */
+    
  protected:
   explicit CapturerTrackSource(
       std::unique_ptr<webrtc::test::VcmCapturer> capturer)

@@ -422,12 +422,15 @@ void GtkMainWnd::OnRowActivated(GtkTreeView* tree_view,
 
 void GtkMainWnd::OnRedraw() {
   gdk_threads_enter();
-  /*
+
   VideoRenderer* remote_renderer = remote_renderer_.get();
   if (remote_renderer && remote_renderer->image() != NULL &&
       draw_area_ != NULL) {
     width_ = remote_renderer->width();
     height_ = remote_renderer->height();
+
+    if (draw_buffer_.get() && draw_buffer_size_ < (width_ * height_ * 4) * 4)
+      draw_buffer_.reset();
 
     if (!draw_buffer_.get()) {
       draw_buffer_size_ = (width_ * height_ * 4) * 4;
@@ -456,26 +459,42 @@ void GtkMainWnd::OnRedraw() {
     if (local_renderer && local_renderer->image()) {
       image = reinterpret_cast<const uint32_t*>(local_renderer->image());
       scaled = reinterpret_cast<uint32_t*>(draw_buffer_.get());
+      // preview can be quite a lot bigger than remote video,
+      // downsacling by two is not always enough
+      int downscale_ratio = 2;
+      int preview_width = local_renderer->width() / 2;
+      int preview_height = local_renderer->height() / 2;
+      while (preview_width > width_ && preview_height > height_) {
+        downscale_ratio *= 2;
+        preview_width /= 2;
+        preview_height /= 2;
+      }
       // Position the local preview on the right side.
-      scaled += (width_ * 2) - (local_renderer->width() / 2);
+      scaled += (width_ * 2) - preview_width;
       // right margin...
       scaled -= 10;
       // ... towards the bottom.
-      scaled += (height_ * width_ * 4) - ((local_renderer->height() / 2) *
-                                          (local_renderer->width() / 2) * 4);
+      scaled += (height_ * 2 - preview_height) * width_ * 2;
       // bottom margin...
       scaled -= (width_ * 2) * 5;
-      for (int r = 0; r < local_renderer->height(); r += 2) {
-        for (int c = 0; c < local_renderer->width(); c += 2) {
-          scaled[c / 2] = image[c + r * local_renderer->width()];
+      for (int r = 0; r < local_renderer->height(); r += downscale_ratio) {
+        for (int csrc = 0, cdst = 0; csrc < local_renderer->width(); csrc += downscale_ratio, ++cdst) {
+          scaled[cdst] = image[csrc];
         }
         scaled += width_ * 2;
+        image += local_renderer->width() * downscale_ratio;
       }
     }
 
+#if GTK_MAJOR_VERSION == 2
+    gdk_draw_rgb_32_image(draw_area_->window,
+                          draw_area_->style->fg_gc[GTK_STATE_NORMAL], 0, 0,
+                          width_ * 2, height_ * 2, GDK_RGB_DITHER_MAX,
+                          draw_buffer_.get(), (width_ * 2) * 4);
+#else
     gtk_widget_queue_draw(draw_area_);
+#endif
   }
-  */
   gdk_threads_leave();
 }
 
