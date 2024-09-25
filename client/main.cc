@@ -18,10 +18,10 @@
 #include <vector>
 
 #include "absl/flags/parse.h"
-#include "examples/peerconnection/client/conductor.h"
-#include "examples/peerconnection/client/flag_defs.h"
-#include "examples/peerconnection/client/main_wnd.h"
-#include "examples/peerconnection/client/peer_connection_client.h"
+#include "examples/headless_peerconnection/client/conductor.h"
+#include "examples/headless_peerconnection/client/flag_defs.h"
+#include "examples/headless_peerconnection/client/main_wnd.h"
+#include "examples/headless_peerconnection/client/headless_peer_connection_client.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/ssl_adapter.h"
 #include "rtc_base/string_utils.h"  // For ToUtf8

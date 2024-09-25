@@ -19,8 +19,8 @@
 
 #include "api/media_stream_interface.h"
 #include "api/peer_connection_interface.h"
-#include "examples/peerconnection/client/main_wnd.h"
-#include "examples/peerconnection/client/peer_connection_client.h"
+#include "examples/headless_peerconnection/client/main_wnd.h"
+#include "examples/headless_peerconnection/client/headless_peer_connection_client.h"
 #include "rtc_base/thread.h"
 
 namespace webrtc {

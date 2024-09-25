@@ -8,10 +8,10 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "examples/peerconnection/client/peer_connection_client.h"
+#include "examples/headless_peerconnection/client/headless_peer_connection_client.h"
 
 #include "api/units/time_delta.h"
-#include "examples/peerconnection/client/defaults.h"
+#include "examples/headless_peerconnection/client/defaults.h"
 #include "rtc_base/async_dns_resolver.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"

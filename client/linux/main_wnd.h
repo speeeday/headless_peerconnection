@@ -20,8 +20,8 @@
 #include "api/scoped_refptr.h"
 #include "api/video/video_frame.h"
 #include "api/video/video_sink_interface.h"
-#include "examples/peerconnection/client/main_wnd.h"
-#include "examples/peerconnection/client/peer_connection_client.h"
+#include "examples/headless_peerconnection/client/main_wnd.h"
+#include "examples/headless_peerconnection/client/headless_peer_connection_client.h"
 
 // Forward declarations.
 typedef struct _GtkWidget GtkWidget;
