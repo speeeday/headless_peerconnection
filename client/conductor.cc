@@ -81,6 +81,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
     const size_t kWidth = 640;
     const size_t kHeight = 480;
     const size_t kFps = 30;
+
     std::unique_ptr<webrtc::test::VcmCapturer> capturer;
     std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
         webrtc::VideoCaptureFactory::CreateDeviceInfo());
@@ -95,7 +96,6 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
         return rtc::make_ref_counted<CapturerTrackSource>(std::move(capturer));
       }
     }
-
     return nullptr;
   }
 
