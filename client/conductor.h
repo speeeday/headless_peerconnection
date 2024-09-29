@@ -49,6 +49,12 @@ class Conductor : public webrtc::PeerConnectionObserver,
   bool connection_active() const;
 
   void Close() override;
+  void RepeatedlyCallGetStatsWrapper(Conductor* conductor);
+
+  void RepeatedlyCallStats();
+
+  void StartStatsThread();
+  void StopStatsThread();
 
  protected:
   ~Conductor();
@@ -131,6 +137,8 @@ class Conductor : public webrtc::PeerConnectionObserver,
   MainWindow* main_wnd_;
   std::deque<std::string*> pending_messages_;
   std::string server_;
+  std::unique_ptr<rtc::Thread> stats_thread_;
+  std::atomic<bool> continue_collecting_stats_;
 };
 
 #endif  // EXAMPLES_PEERCONNECTION_CLIENT_CONDUCTOR_H_

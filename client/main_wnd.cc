@@ -8,12 +8,12 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "examples/peerconnection/client/main_wnd.h"
+#include "examples/headless_peerconnection/client/main_wnd.h"
 
 #include <math.h>
 
 #include "api/video/i420_buffer.h"
-#include "examples/peerconnection/client/defaults.h"
+#include "examples/headless_peerconnection/client/defaults.h"
 #include "rtc_base/arraysize.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"

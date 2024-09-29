@@ -102,6 +102,7 @@ int main(int argc, char* argv[]) {
   // Must be constructed after we set the socketserver.
   PeerConnectionClient client;
   auto conductor = rtc::make_ref_counted<Conductor>(&client, &wnd);
+  conductor->StartStatsThread();
   socket_server.set_client(&client);
   socket_server.set_conductor(conductor.get());
 

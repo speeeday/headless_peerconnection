@@ -8,12 +8,15 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "examples/peerconnection/client/conductor.h"
+#include "examples/headless_peerconnection/client/conductor.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <chrono>
+#include <fstream>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -26,7 +29,9 @@
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/audio_options.h"
 #include "api/create_peerconnection_factory.h"
+#include "api/peer_connection_interface.h"
 #include "api/rtp_sender_interface.h"
+#include "api/stats/rtcstats_objects.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
@@ -39,7 +44,7 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
-#include "examples/peerconnection/client/defaults.h"
+#include "examples/headless_peerconnection/client/defaults.h"
 #include "modules/audio_device/include/audio_device.h"
 #include "modules/audio_processing/include/audio_processing.h"
 #include "modules/video_capture/video_capture.h"
@@ -48,6 +53,7 @@
 #include "pc/video_track_source.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/strings/json.h"
 #include "test/vcm_capturer.h"
@@ -61,6 +67,103 @@ const char kCandidateSdpName[] = "candidate";
 // Names used for a SessionDescription JSON object.
 const char kSessionDescriptionTypeName[] = "type";
 const char kSessionDescriptionSdpName[] = "sdp";
+
+class MyStatsObserver : public webrtc::StatsObserver {
+public:
+
+    MyStatsObserver(): ref_count_(0) {}
+
+    void AddRef() const override {
+      ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    rtc::RefCountReleaseStatus Release() const override {
+      const auto ref_count = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
+      RTC_DCHECK_GT(ref_count, 0);
+      if (ref_count == 1) {
+        delete this;
+        return rtc::RefCountReleaseStatus::kDroppedLastRef;
+      }
+      return rtc::RefCountReleaseStatus::kOtherRefsRemained;
+    }
+
+    void OnComplete(const webrtc::StatsReports& reports) override {
+        std::ofstream logfile("legacy_output_stats.txt", std::ios::app);
+
+        if (!logfile.is_open()) {
+            RTC_LOG(LS_ERROR) << "Failed to open file: legacy_output_stats.txt";
+            return;
+        }
+
+        // Process the stats here.
+        for (const webrtc::StatsReport* report : reports) {
+            // Example: Print the stats to standard output.
+            logfile << std::to_string(report->timestamp()) << " - Stats report id: " << report->id()->ToString() << "\n" << std::endl;
+            // Iterate through each stat in the report
+            for (const std::pair<const webrtc::StatsReport::StatsValueName,webrtc::StatsReport::ValuePtr>& stat : report->values()) {
+                logfile << stat.second->display_name() << ": ";
+
+                // Print the value based on the value's type
+                switch (stat.second->type()) {
+                    case webrtc::StatsReport::Value::kInt:
+                        logfile << stat.second->int_val();
+                        break;
+                    case webrtc::StatsReport::Value::kInt64:
+                        logfile << stat.second->int64_val();
+                        break;
+                    case webrtc::StatsReport::Value::kFloat:
+                        logfile << stat.second->float_val();
+                        break;
+                    case webrtc::StatsReport::Value::kString:
+                        logfile << stat.second->string_val();
+                        break;
+                    case webrtc::StatsReport::Value::kBool:
+                        logfile << (stat.second->bool_val() ? "true" : "false");
+                        break;
+                    // Include other cases as necessary
+                    default:
+                        logfile << "Unknown Type";
+                        break;
+                }
+                logfile << std::endl;
+            }
+            logfile << std::endl;
+        }
+    }
+
+private:
+    mutable std::atomic<int> ref_count_;
+};
+
+class MyStatsCollector : public webrtc::RTCStatsCollectorCallback {
+public:
+
+    explicit MyStatsCollector(const std::string& filename) : filename_(filename) {}
+    // Override the OnStatsDelivered method to handle the stats.
+    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+        std::ofstream logfile(filename_, std::ios::app);
+
+        if (!logfile.is_open()) {
+            RTC_LOG(LS_ERROR) << "Failed to open file: " << filename_;
+            return;
+        }
+
+        // Process the stats report here.
+        for (const webrtc::RTCStats& stats : *report) {
+            // Log specific stats here. Example:
+            if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
+                const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
+                logfile << "[INFO]: Current round trip time: " << std::to_string(*(candidate_pair.current_round_trip_time)) << "\n";
+            }
+        }
+
+        logfile.close();
+    }
+private:
+    std::string filename_;
+};
+
+
 
 class DummySetSessionDescriptionObserver
     : public webrtc::SetSessionDescriptionObserver {
@@ -114,13 +217,29 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
 }  // namespace
 
 Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
-    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd) {
+    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), continue_collecting_stats_(true) {
   client_->RegisterObserver(this);
   main_wnd->RegisterObserver(this);
-}
 
-Conductor::~Conductor() {
-  RTC_DCHECK(!peer_connection_);
+  // Create new output_stats.txt file
+  std::ofstream logfile("output_stats.txt", std::ofstream::out | std::ofstream::trunc);
+
+  if (!logfile.is_open()) {
+      RTC_LOG(LS_ERROR) << "Failed to open file: output_stats.txt";
+      return;
+  }
+
+  // Create new output_stats.txt file
+  std::ofstream legacy_logfile("legacy_output_stats.txt", std::ofstream::out | std::ofstream::trunc);
+
+  if (!legacy_logfile.is_open()) {
+      RTC_LOG(LS_ERROR) << "Failed to open file: legacy_output_stats.txt";
+      return;
+  }
+
+  stats_thread_ = rtc::Thread::Create();
+  stats_thread_->Start();
+
 }
 
 bool Conductor::connection_active() const {
@@ -130,6 +249,41 @@ bool Conductor::connection_active() const {
 void Conductor::Close() {
   client_->SignOut();
   DeletePeerConnection();
+}
+
+void Conductor::RepeatedlyCallGetStatsWrapper(Conductor* conductor) {
+  if (conductor) {
+    conductor->RepeatedlyCallStats();
+  } 
+}
+
+void Conductor::RepeatedlyCallStats() {
+  RTC_LOG(LS_INFO) << "Called the function StartStatsThread!!!\n";
+  while (continue_collecting_stats_) {
+    if (peer_connection_.get()) {
+        MyStatsObserver* stats_observer = new MyStatsObserver();
+        peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
+    }
+
+    rtc::Thread::SleepMs(500);
+  }
+}
+
+void Conductor::StartStatsThread() {
+  RTC_LOG(LS_INFO) << "Called the function StartStatsThread!!!\n";
+  stats_thread_->PostTask([this]() {
+    RepeatedlyCallGetStatsWrapper(this);
+  });
+}
+
+void Conductor::StopStatsThread() {
+  continue_collecting_stats_ = false;
+  stats_thread_->Stop();
+}
+
+Conductor::~Conductor() {
+  RTC_DCHECK(!peer_connection_);
+  StopStatsThread();
 }
 
 bool Conductor::InitializePeerConnection() {
@@ -332,6 +486,17 @@ void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
            "conversation with a different peer.";
     return;
   }
+
+  RTC_LOG(LS_INFO) << "Received message from peer :" << message;
+
+/*
+  rtc::scoped_refptr<MyStatsCollector> stats_collector(new rtc::RefCountedObject<MyStatsCollector>("output_stats.txt"));
+  peer_connection_->GetStats(stats_collector.get());
+
+
+  MyStatsObserver* stats_observer = new MyStatsObserver();
+  peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
+*/
 
   Json::CharReaderBuilder factory;
   std::unique_ptr<Json::CharReader> reader =
