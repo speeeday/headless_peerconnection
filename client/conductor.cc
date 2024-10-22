@@ -265,7 +265,7 @@ void Conductor::RepeatedlyCallStats() {
         peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
     }
 
-    rtc::Thread::SleepMs(500);
+    rtc::Thread::SleepMs(100);
   }
 }
 
