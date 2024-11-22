@@ -23,6 +23,8 @@
 #include "examples/headless_peerconnection/client/headless_peer_connection_client.h"
 #include "rtc_base/thread.h"
 
+
+
 namespace webrtc {
 class VideoCaptureModule;
 }  // namespace webrtc
@@ -49,11 +51,19 @@ class Conductor : public webrtc::PeerConnectionObserver,
   bool connection_active() const;
 
   void Close() override;
+
+  void LogStats();
   void RepeatedlyCallGetStatsWrapper(Conductor* conductor);
+  void RepeatedlyStartStatsLogging(Conductor* conductor);
 
   void RepeatedlyCallStats();
+  void StartStatsLogging();
 
+
+
+  void StartLegacyStatsThread();
   void StartStatsThread();
+  void StopLegacyStatsThread();
   void StopStatsThread();
 
  protected:
@@ -138,6 +148,7 @@ class Conductor : public webrtc::PeerConnectionObserver,
   std::deque<std::string*> pending_messages_;
   std::string server_;
   std::unique_ptr<rtc::Thread> stats_thread_;
+  std::unique_ptr<rtc::Thread> legacy_stats_thread_;
   std::atomic<bool> continue_collecting_stats_;
 };
 

@@ -32,6 +32,7 @@
 #include "api/peer_connection_interface.h"
 #include "api/rtp_sender_interface.h"
 #include "api/stats/rtcstats_objects.h"
+#include "api/stats/rtc_stats_report.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
@@ -57,6 +58,8 @@
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/strings/json.h"
 #include "test/vcm_capturer.h"
+
+
 
 namespace {
 // Names used for a IceCandidate JSON object.
@@ -135,35 +138,28 @@ private:
     mutable std::atomic<int> ref_count_;
 };
 
-class MyStatsCollector : public webrtc::RTCStatsCollectorCallback {
-public:
+class StatsLoggerCallback : public webrtc::RTCStatsCollectorCallback {
+ public:
+  void OnStatsDelivered(
+      const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
 
-    explicit MyStatsCollector(const std::string& filename) : filename_(filename) {}
-    // Override the OnStatsDelivered method to handle the stats.
-    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
-        std::ofstream logfile(filename_, std::ios::app);
-
-        if (!logfile.is_open()) {
-            RTC_LOG(LS_ERROR) << "Failed to open file: " << filename_;
-            return;
-        }
-
-        // Process the stats report here.
-        for (const webrtc::RTCStats& stats : *report) {
-            // Log specific stats here. Example:
-            if (stats.type() == webrtc::RTCIceCandidatePairStats::kType) {
-                const auto& candidate_pair = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
-                logfile << "[INFO]: Current round trip time: " << std::to_string(*(candidate_pair.current_round_trip_time)) << "\n";
-            }
-        }
-
-        logfile.close();
+    std::ofstream logfile("output_stats.txt", std::ios::app);
+    if (!logfile.is_open()) {
+        RTC_LOG(LS_ERROR) << "Failed to open file: output_stats.txt";
+        return;
     }
-private:
-    std::string filename_;
+    logfile << std::to_string(report->timestamp().ms<double>()) << " --- Stats Report: " << "\n" << std::endl;
+    for (const auto& stats : *report) {
+      logfile << "- Stats for " << stats.type() << ": " << stats.id() << "\n" << std::endl;
+      for (const auto& attribute : stats.Attributes()) {
+        logfile << "    " << attribute.name() << ": " << attribute.ToString();
+        logfile << std::endl;
+      }
+      logfile << std::endl;
+    }
+    //logfile << "-----------------------------";
+  }
 };
-
-
 
 class DummySetSessionDescriptionObserver
     : public webrtc::SetSessionDescriptionObserver {
@@ -217,7 +213,7 @@ class CapturerTrackSource : public webrtc::VideoTrackSource {
 }  // namespace
 
 Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
-    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), continue_collecting_stats_(true) {
+    : peer_id_(-1), loopback_(false), client_(client), main_wnd_(main_wnd), stats_thread_(nullptr), legacy_stats_thread_(nullptr), continue_collecting_stats_(true) {
   client_->RegisterObserver(this);
   main_wnd->RegisterObserver(this);
 
@@ -237,6 +233,9 @@ Conductor::Conductor(PeerConnectionClient* client, MainWindow* main_wnd)
       return;
   }
 
+  legacy_stats_thread_ = rtc::Thread::Create();
+  legacy_stats_thread_->Start();
+
   stats_thread_ = rtc::Thread::Create();
   stats_thread_->Start();
 
@@ -251,9 +250,27 @@ void Conductor::Close() {
   DeletePeerConnection();
 }
 
+void Conductor::LogStats() {
+  if (!peer_connection_) {
+    RTC_LOG(LS_ERROR) << "PeerConnection is not initialized.";
+    return;
+  }
+
+  // Create a stats collector callback and pass it to GetStats
+  rtc::scoped_refptr<StatsLoggerCallback> callback =
+      rtc::make_ref_counted<StatsLoggerCallback>();
+  peer_connection_->GetStats(callback.get());
+}
+
 void Conductor::RepeatedlyCallGetStatsWrapper(Conductor* conductor) {
   if (conductor) {
     conductor->RepeatedlyCallStats();
+  } 
+}
+
+void Conductor::RepeatedlyStartStatsLogging(Conductor* conductor) {
+  if (conductor) {
+    conductor->StartStatsLogging();
   } 
 }
 
@@ -265,15 +282,38 @@ void Conductor::RepeatedlyCallStats() {
         peer_connection_->GetStats(stats_observer, nullptr, webrtc::PeerConnectionInterface::kStatsOutputLevelStandard);
     }
 
-    rtc::Thread::SleepMs(500);
+    rtc::Thread::SleepMs(100);
   }
+}
+
+void Conductor::StartStatsLogging() {
+  rtc::Thread::Current()->PostDelayedTask(
+      [this]() {
+        if (peer_connection_) {
+          LogStats();
+          StartStatsLogging();  // Schedule the next call
+        }
+      },
+      webrtc::TimeDelta::Seconds(5));  // Call every 5 seconds
+}
+
+void Conductor::StartLegacyStatsThread() {
+  RTC_LOG(LS_INFO) << "Called the function LegaacyStartStatsThread!!!\n";
+  legacy_stats_thread_->PostTask([this]() {
+    RepeatedlyCallGetStatsWrapper(this);
+  });
 }
 
 void Conductor::StartStatsThread() {
   RTC_LOG(LS_INFO) << "Called the function StartStatsThread!!!\n";
   stats_thread_->PostTask([this]() {
-    RepeatedlyCallGetStatsWrapper(this);
+    RepeatedlyStartStatsLogging(this);
   });
+}
+
+void Conductor::StopLegacyStatsThread() {
+  continue_collecting_stats_ = false;
+  legacy_stats_thread_->Stop();
 }
 
 void Conductor::StopStatsThread() {
@@ -283,6 +323,7 @@ void Conductor::StopStatsThread() {
 
 Conductor::~Conductor() {
   RTC_DCHECK(!peer_connection_);
+  StopLegacyStatsThread();
   StopStatsThread();
 }
 
@@ -427,6 +468,8 @@ void Conductor::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {
 
   Json::StreamWriterBuilder factory;
   SendMessage(Json::writeString(factory, jmessage));
+
+  LogStats();
 }
 
 //
