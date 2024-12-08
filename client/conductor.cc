@@ -294,7 +294,7 @@ void Conductor::StartStatsLogging() {
           StartStatsLogging();  // Schedule the next call
         }
       },
-      webrtc::TimeDelta::Seconds(0.2));  // Call every 200 ms
+      webrtc::TimeDelta::Seconds(1));  // Call every 5 seconds
 }
 
 void Conductor::StartLegacyStatsThread() {
